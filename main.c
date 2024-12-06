@@ -6,6 +6,9 @@
 
 #include "instruction.h"
 
+#define BIT(a, n) ((a & (1 << n)) ? 1 : 0)
+#define BIT_SET(a, n, on) { if (on) a |= (1 << n); else a &= ~(1 << n);}
+
 typedef struct
 {
     uint8_t A; uint8_t F;
@@ -30,13 +33,33 @@ typedef struct {
 
 CPU cpu = {0};
 
+void cpu_set_flags(char z, char n, char h, char c) {
+    if (z != -1) {
+        BIT_SET(cpu.regs.F, 7, z);
+    }
+
+    if (n != -1) {
+        BIT_SET(cpu.regs.F, 6, n);
+    }
+
+    if (h != -1) {
+        BIT_SET(cpu.regs.F, 5, h);
+    }
+
+    if (c != -1) {
+        BIT_SET(cpu.regs.F, 4, c);
+    }
+}
+
 Instruction instructions[0x100] = {
-    [0x00] = {IN_NOP, AM_IMP},
-    [0x05] = {IN_DEC, AM_R, REG_B},
-    [0x06] = {IN_LD, AM_R_D8, REG_B},
-    [0x0e] = {IN_LD, AM_R_D8, REG_C},
-    [0xaf] = {IN_XOR, AM_R, REG_A},
-    [0xc3] = {IN_JP, AM_D16}
+    [0x00] = {IN_NOP, "NOP", AM_IMP},
+    [0x05] = {IN_DEC, "DEC B", AM_R, REG_B},
+    [0x06] = {IN_LD, "LD B, d8", AM_R_D8, REG_B},
+    [0x0e] = {IN_LD, "LD C, d8", AM_R_D8, REG_C},
+    [0x21] = {IN_LD, "LD HL, d16", AM_R_D16, REG_HL},
+    [0x32] = {IN_LD, "LD (HL-), A", AM_HLD_R, REG_HL, REG_A},
+    [0xaf] = {IN_XOR, "XOR A, A", AM_R, REG_A},
+    [0xc3] = {IN_JP, "JP a16", AM_D16}
 };
 
 // Z N H C
@@ -80,6 +103,8 @@ void bus_write(uint16_t addr, uint8_t byte)
     assert(0);
 }
 
+void cycles(uint8_t n) {}
+
 uint16_t cpu_read_reg(reg_type rt)
 {
     switch (rt)
@@ -87,6 +112,7 @@ uint16_t cpu_read_reg(reg_type rt)
     case REG_A: return cpu.regs.A;
     case REG_B: return cpu.regs.B;
     case REG_C: return cpu.regs.C;
+    case REG_HL: return (cpu.regs.H << 8) | cpu.regs.L;
 
     default:
         printf("register unimplemented\n");
@@ -95,10 +121,42 @@ uint16_t cpu_read_reg(reg_type rt)
     }
 }
 
+void cpu_set_reg(reg_type rt, uint16_t v)
+{
+    switch (rt)
+    {
+    case REG_A: cpu.regs.A = v & 0xff; break;
+    case REG_B: cpu.regs.B = v & 0xff; break;
+    case REG_C: cpu.regs.C = v & 0xff; break;
+    case REG_HL: {
+        cpu.regs.H = (v >> 8) & 0xff;
+        cpu.regs.L = v & 0xff;
+        break;
+    }
+
+    default:
+        printf("register unimplemented\n");
+        assert(0);
+        break;
+    }
+}
+
+Instruction *get_ins_from_opcode(uint8_t opcode)
+{
+    if (instructions[opcode].kind == IN_INVALID) {
+        return NULL;
+    }
+    return &instructions[opcode];
+}
+
 void fetch_ins()
 {
     cpu.curr_op = bus_read(cpu.regs.PC++);
-    cpu.curr_ins = &instructions[cpu.curr_op];
+    cpu.curr_ins = get_ins_from_opcode(cpu.curr_op);
+    if (cpu.curr_ins == NULL) {
+        printf("unknown instruction 0x%x\n", cpu.curr_op);
+        assert(0);
+    }
 }
 
 void fetch_data()
@@ -109,6 +167,7 @@ void fetch_data()
     switch (cpu.curr_ins->mode)
     {
     case AM_IMP: return;
+
     case AM_R: {
         cpu.fetched_data = cpu_read_reg(cpu.curr_ins->reg1);
         return;
@@ -117,27 +176,76 @@ void fetch_data()
     case AM_R_D8: {
         cpu.fetched_data = bus_read(cpu.regs.PC);
         cpu.regs.PC++;
+        cycles(1);
         return;
     }
+
+    case AM_D16: {
+        uint16_t lo = bus_read(cpu.regs.PC);
+        uint16_t hi = bus_read(cpu.regs.PC + 1);
+        cpu.fetched_data = (hi << 8) | lo;
+        cpu.regs.PC += 2;
+        cycles(2);
+        return;
+    }
+
+    case AM_R_D16: {
+        uint16_t lo = bus_read(cpu.regs.PC);
+        uint16_t hi = bus_read(cpu.regs.PC + 1);
+        cpu.fetched_data = (hi << 8) | lo;
+        cpu.regs.PC += 2;
+        cycles(2);
+        break;
+    }
+
+    case AM_HLI_R: {
+        cpu.fetched_data = cpu_read_reg(cpu.curr_ins->reg2);
+        cpu.mem_dst = cpu_read_reg(cpu.curr_ins->reg1);
+        cpu.dst_is_mem = true;
+        cpu_set_reg(REG_HL, cpu_read_reg(REG_HL) + 1);
+        break;
+    }
+
+    case AM_HLD_R: {
+        cpu.fetched_data = cpu_read_reg(cpu.curr_ins->reg2);
+        cpu.mem_dst = cpu_read_reg(cpu.curr_ins->reg1);
+        cpu.dst_is_mem = true;
+        cpu_set_reg(REG_HL, cpu_read_reg(REG_HL) - 1);
+        break;
+    }
+
     default:
+        printf("unknown addressing mode %d", cpu.curr_ins->mode);
+        assert(0);
         break;
     }
 }
 
 void execute()
 {
-
+    switch (cpu.curr_ins->kind)
+    {
+    case IN_XOR:
+        cpu.regs.A ^= cpu.fetched_data & 0xff;
+        cpu_set_flags(cpu.regs.A, 0, 0, 0);
+        break;
+    
+    default:
+        break;
+    }
 }
 
 void cpu_init()
 {
-    cpu.regs.PC = 0x150;
+    cpu.regs.PC = 0x20c; //0x150;
 }
 
 bool cpu_step() {
     if(!cpu.halt) {
+        uint16_t pc = cpu.regs.PC;
         fetch_ins();
         fetch_data();
+        printf("0x%04X: 0x%02X %s\n", pc, cpu.curr_op, cpu.curr_ins->str);
         execute();
         return true;
     }
@@ -166,7 +274,7 @@ int main()
     rom_size = 32 * 1024 * (1 << val);
     assert(f_size == rom_size);
     printf("ROM SIZE: %d\n", rom_size);
-
+    printf("=========\n");
     rewind(fp);
 
     // Read Entire ROM

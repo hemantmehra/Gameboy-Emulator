@@ -5,7 +5,8 @@
 typedef enum {
     REG_A,
     REG_B,
-    REG_C
+    REG_C,
+    REG_HL
 } reg_type;
 
 typedef enum {
@@ -13,7 +14,11 @@ typedef enum {
     AM_R,
     AM_R_R,
     AM_R_D8,
-    AM_D16
+    AM_R_D16,
+    AM_D16,
+    AM_MR_R,
+    AM_HLI_R,
+    AM_HLD_R
 } addr_mod;
 
 typedef enum {
@@ -27,6 +32,7 @@ typedef enum {
 
 typedef struct {
     ins_kind kind;
+    char *str;
     addr_mod mode;
     reg_type reg1;
     reg_type reg2;
