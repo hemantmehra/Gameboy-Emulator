@@ -18,7 +18,9 @@ typedef enum {
     AM_D16,
     AM_MR_R,
     AM_HLI_R,
-    AM_HLD_R
+    AM_HLD_R,
+    AM_D8,
+    AM_HL_SPR
 } addr_mod;
 
 typedef enum {
@@ -30,11 +32,16 @@ typedef enum {
     IN_LD
 } ins_kind;
 
+typedef enum {
+    CT_NONE, CT_NZ, CT_Z, CT_NC, CT_C
+} cond_type;
+
 typedef struct {
     ins_kind kind;
     char *str;
     addr_mod mode;
     reg_type reg1;
     reg_type reg2;
+    cond_type cond;
     uint8_t param;
 } Instruction;

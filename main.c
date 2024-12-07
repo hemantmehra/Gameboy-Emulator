@@ -9,6 +9,21 @@
 #define BIT(a, n) ((a & (1 << n)) ? 1 : 0)
 #define BIT_SET(a, n, on) { if (on) a |= (1 << n); else a &= ~(1 << n);}
 
+// 0x0000 - 0x3FFF : ROM Bank 0
+// 0x4000 - 0x7FFF : ROM Bank 1 - Switchable
+// 0x8000 - 0x97FF : CHR RAM
+// 0x9800 - 0x9BFF : BG Map 1
+// 0x9C00 - 0x9FFF : BG Map 2
+// 0xA000 - 0xBFFF : Cartridge RAM
+// 0xC000 - 0xCFFF : RAM Bank 0
+// 0xD000 - 0xDFFF : RAM Bank 1-7 - switchable - Color only
+// 0xE000 - 0xFDFF : Reserved - Echo RAM
+// 0xFE00 - 0xFE9F : Object Attribute Memory
+// 0xFEA0 - 0xFEFF : Reserved - Unusable
+// 0xFF00 - 0xFF7F : I/O Registers
+// 0xFF80 - 0xFFFE : Zero Page
+
+
 typedef struct
 {
     uint8_t A; uint8_t F;
@@ -56,26 +71,12 @@ Instruction instructions[0x100] = {
     [0x05] = {IN_DEC, "DEC B", AM_R, REG_B},
     [0x06] = {IN_LD, "LD B, d8", AM_R_D8, REG_B},
     [0x0e] = {IN_LD, "LD C, d8", AM_R_D8, REG_C},
+    [0x20] = {IN_JP, "JR NZ, s8", AM_D8, 0, 0, CT_NZ},
     [0x21] = {IN_LD, "LD HL, d16", AM_R_D16, REG_HL},
     [0x32] = {IN_LD, "LD (HL-), A", AM_HLD_R, REG_HL, REG_A},
     [0xaf] = {IN_XOR, "XOR A, A", AM_R, REG_A},
     [0xc3] = {IN_JP, "JP a16", AM_D16}
 };
-
-// Z N H C
-// 3 2 1 0
-// enum Flags {
-//     F_C,
-//     F_H,
-//     F_N,
-//     F_Z,
-// };
-
-// void setF(enum Flags f)
-// {
-//     regs.F |= (1 << f); 
-// }
-
 
 uint8_t bus_read(uint16_t addr)
 {
@@ -101,6 +102,18 @@ void bus_write(uint16_t addr, uint8_t byte)
 
     printf("Unimpl bus_read above 0xE000 or below 0x8000");
     assert(0);
+}
+
+uint16_t bus_read16(uint16_t address) {
+    uint16_t lo = bus_read(address);
+    uint16_t hi = bus_read(address + 1);
+
+    return lo | (hi << 8);
+}
+
+void bus_write16(uint16_t address, uint16_t value) {
+    bus_write(address + 1, (value >> 8) & 0xFF);
+    bus_write(address, value & 0xFF);
 }
 
 void cycles(uint8_t n) {}
@@ -179,6 +192,13 @@ void fetch_data()
         cycles(1);
         return;
     }
+    
+    case AM_D8: {
+        cpu.fetched_data = bus_read(cpu.regs.PC);
+        cycles(1);
+        cpu.regs.PC++;
+        return;
+    }
 
     case AM_D16: {
         uint16_t lo = bus_read(cpu.regs.PC);
@@ -225,12 +245,61 @@ void execute()
 {
     switch (cpu.curr_ins->kind)
     {
+    case IN_DEC:
+        cpu.regs.B--;
+        cpu_set_flags(cpu.regs.B, 0, 0, 0);
+        break;
     case IN_XOR:
         cpu.regs.A ^= cpu.fetched_data & 0xff;
         cpu_set_flags(cpu.regs.A, 0, 0, 0);
         break;
     
+    case IN_LD:
+        if (cpu.dst_is_mem) {
+            // LD (BC), A
+            reg_type r2 = cpu.curr_ins->reg2;
+            switch (r2) {
+                case REG_A:
+                case REG_B:
+                case REG_C:
+                    bus_write(cpu.mem_dst, cpu.fetched_data);
+                    break;
+                case REG_HL:
+                    bus_write16(cpu.mem_dst, cpu.fetched_data);
+                    break;
+                default:
+                    printf("unimplemented for this reg.\n");
+                    assert(0);
+            }
+            return;
+        }
+
+        if (cpu.curr_ins->mode == AM_HL_SPR) {
+            assert(0);
+        }
+
+        cpu_set_reg(cpu.curr_ins->reg1, cpu.fetched_data);
+        break;
+
+    case IN_JP:
+        switch (cpu.curr_ins->cond) {
+            case CT_NZ:
+                if (BIT(cpu.regs.F, 7)) {
+                    
+                }
+                else {
+                    cpu.regs.PC -= cpu.fetched_data;
+                }
+                break;
+            default:
+                printf("unimplemented jmp condition\n");
+                assert(0);
+                break;
+        }
+        break;
     default:
+        printf("unimplemented execute %d\n", cpu.curr_ins->kind);
+        assert(0);
         break;
     }
 }
